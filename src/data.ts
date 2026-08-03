@@ -30,17 +30,19 @@ export const SEED_USERS: UserAccount[] = [
   {
     id: "U_ST01",
     username: "DTG245140202053",
-    name: "Nguyễn Văn An",
+    name: "Ma Văn Long",
     role: UserRole.STUDENT,
     email: "DTG245140202053",
+    password: "004206005165",
     targetId: "DTG245140202053"
   },
   {
     id: "U_ORG01",
-    username: "clbnckh@hg.edu.vn",
+    username: "unitech@hg.edu.vn",
     name: "CLB Sáng tạo Công nghệ UniTech",
     role: UserRole.CLUB_MANAGER,
-    email: "clbnckh@hg.edu.vn",
+    email: "unitech@hg.edu.vn",
+    password: "password123",
     targetId: "UNITECH"
   },
   {
@@ -49,6 +51,7 @@ export const SEED_USERS: UserAccount[] = [
     name: "BCH Đoàn TNCS Phân hiệu Hà Giang",
     role: UserRole.YOUTH_UNION,
     email: "doantnphhg@hg.edu.vn",
+    password: "password123",
     targetId: "DOANTN"
   },
   {
@@ -57,14 +60,34 @@ export const SEED_USERS: UserAccount[] = [
     name: "BCH Hội Sinh viên Phân hiệu Hà Giang",
     role: UserRole.STUDENT_UNION,
     email: "hsvphhg@hg.edu.vn",
+    password: "password123",
     targetId: "HOISV"
+  },
+  {
+    id: "U_ORG04",
+    username: "clbnckh@hg.edu.vn",
+    name: "Câu lạc bộ Nghiên cứu Khoa học",
+    role: UserRole.CLUB_MANAGER,
+    email: "clbnckh@hg.edu.vn",
+    password: "password123",
+    targetId: "CLBNCKH"
+  },
+  {
+    id: "U_ORG05",
+    username: "tinhnx@hg.edu.vn",
+    name: "CLB Tình nguyện Giọt hồng Hà Giang",
+    role: UserRole.CLUB_MANAGER,
+    email: "tinhnx@hg.edu.vn",
+    password: "password123",
+    targetId: "TINHNX"
   },
   {
     id: "U_TD01",
     username: "dtphhg@hg.edu.vn",
     name: "Trần Thị Mai",
     role: UserRole.TRAINING_DEPT,
-    email: "dtphhg@hg.edu.vn"
+    email: "dtphhg@hg.edu.vn",
+    password: "password123"
   },
   {
     id: "U_CM01",
@@ -72,6 +95,7 @@ export const SEED_USERS: UserAccount[] = [
     name: "Lâm Minh Triết",
     role: UserRole.CLASS_MONITOR,
     email: "cblk2gdtha@hg.edu.vn",
+    password: "password123",
     targetId: "K20-CNTT"
   },
   {
@@ -80,6 +104,7 @@ export const SEED_USERS: UserAccount[] = [
     name: "Hoàng Minh Đức",
     role: UserRole.ADVISER,
     email: "gvcnk2gdtha@hg.edu.vn",
+    password: "password123",
     targetId: "K20-CNTT"
   },
   {
@@ -88,6 +113,7 @@ export const SEED_USERS: UserAccount[] = [
     name: "Khoa Sư phạm",
     role: UserRole.FACULTY,
     email: "khoasp@hg.edu.vn",
+    password: "password123",
     targetId: "K-CNTT"
   },
   {
@@ -95,7 +121,8 @@ export const SEED_USERS: UserAccount[] = [
     username: "pcthssv@hg.edu.vn",
     name: "Phòng Công tác HSSV (Admin)",
     role: UserRole.ADMIN,
-    email: "pcthssv@hg.edu.vn"
+    email: "pcthssv@hg.edu.vn",
+    password: "password123"
   }
 ];
 
@@ -161,7 +188,7 @@ export const SEED_CRITERIA: PointCriteria[] = [
 export const SEED_STUDENTS: Student[] = [
   {
     id: "DTG245140202053",
-    name: "Nguyễn Văn An",
+    name: "Ma Văn Long",
     classId: "K20-CNTT",
     facultyId: "K-CNTT",
     email: "DTG245140202053",
@@ -174,7 +201,7 @@ export const SEED_STUDENTS: Student[] = [
     dob: "2006-05-14",
     pob: "Vị Xuyên, Hà Giang",
     ethnicity: "Kinh",
-    idCard: "001206009876",
+    idCard: "004206005165",
     idCardDate: "2022-04-12",
     idCardPlace: "Cục Cảnh sát QLHC về TTXH",
     subjects: "Lập trình Web, Cơ sở dữ liệu, Thiết kế UI/UX",

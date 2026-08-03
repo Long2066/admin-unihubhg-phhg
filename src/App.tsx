@@ -25,6 +25,7 @@ import {
 import { 
   UserAccount, 
   UserRole, 
+  isOrgRole,
   Student, 
   Organization, 
   OrganizationMember, 
@@ -1080,16 +1081,48 @@ export default function App() {
       }
       const targetPassword = userForm.password || "password123";
 
-      // Build clean user data object (only allowed Firestore fields)
+      let resolvedTargetId = userForm.targetId ? userForm.targetId.trim() : "";
+      if (userForm.role === UserRole.STUDENT) {
+        const studentInTraining = students.find(s => 
+          (s.id && s.id.trim().toLowerCase() === userForm.username.trim().toLowerCase()) ||
+          (s.email && s.email.trim().toLowerCase() === userForm.username.trim().toLowerCase())
+        );
+        if (!studentInTraining) {
+          alert("Lỗi quy chuẩn Sinh viên: Tên đăng nhập phải là Mã sinh viên đã có trong danh sách của Phòng Đào tạo!");
+          return;
+        }
+        resolvedTargetId = studentInTraining.id;
+        if (studentInTraining.idCard && (!userForm.password || userForm.password === "password123")) {
+          userForm.password = studentInTraining.idCard.trim();
+        }
+      }
+      if (!resolvedTargetId) {
+        if (userForm.role === UserRole.YOUTH_UNION) resolvedTargetId = "DOANTN";
+        else if (userForm.role === UserRole.STUDENT_UNION) resolvedTargetId = "HOISV";
+        else if (userForm.role === UserRole.CLUB_MANAGER || userForm.role === UserRole.ORGANIZER) {
+          const matchedOrg = organizations.find(o => 
+            (userForm.name && o.name.toLowerCase().includes(userForm.name.toLowerCase())) ||
+            (userForm.username && userForm.username.toLowerCase().includes(o.id.toLowerCase()))
+          );
+          resolvedTargetId = matchedOrg ? matchedOrg.id : (userForm.username.split("@")[0].toUpperCase() || `CLB_${Date.now()}`);
+        }
+      }
+
+      // Build clean user data object (only allowed Firestore fields, trimmed for accuracy)
+      const cleanUsername = userForm.username.trim();
+      const cleanEmail = targetEmail.trim();
+      const cleanPassword = targetPassword.trim();
+      const cleanName = userForm.name.trim();
+
       const userData: Record<string, any> = {
-        name: userForm.name,
-        username: userForm.username,
-        email: targetEmail,
+        name: cleanName,
+        username: cleanUsername,
+        email: cleanEmail,
         role: userForm.role,
-        password: targetPassword
+        password: cleanPassword
       };
-      if (userForm.targetId && userForm.targetId.trim()) {
-        userData.targetId = userForm.targetId.trim();
+      if (resolvedTargetId) {
+        userData.targetId = resolvedTargetId;
       }
       if (userForm.role === UserRole.CLASS_MONITOR && userForm.monitorTitle) {
         userData.monitorTitle = userForm.monitorTitle;
@@ -1133,6 +1166,20 @@ export default function App() {
         await setDoc(doc(db, "users", targetDocId), userData);
       }
 
+      // Auto-upsert matching Organization document for org accounts so CTHSSV portal renders it
+      if (isOrgRole(userForm.role) && resolvedTargetId) {
+        const orgType = userForm.role === UserRole.YOUTH_UNION ? "DOAN" : (userForm.role === UserRole.STUDENT_UNION ? "HOI" : "CLB");
+        const orgDoc = {
+          id: resolvedTargetId,
+          name: userForm.name || "Tổ chức / CLB",
+          type: orgType,
+          leaderName: "Trưởng ban quản lý",
+          field: "Hoạt động sinh viên",
+          level: "TRUONG"
+        };
+        await setDoc(doc(db, "organizations", resolvedTargetId), orgDoc, { merge: true }).catch(() => {});
+      }
+
       setShowUserModal(false);
       setTimeout(() => {
         alert("Đã lưu thông tin tài khoản thành công!");
@@ -1146,7 +1193,11 @@ export default function App() {
   const deleteUser = async (id: string, name: string) => {
     if (confirm(`Bạn có chắc chắn muốn xóa tài khoản "${name}"?`)) {
       try {
+        const userToDelete = users.find(u => u.id === id);
         await deleteDoc(doc(db, "users", id));
+        if (userToDelete && isOrgRole(userToDelete.role) && userToDelete.targetId) {
+          await deleteDoc(doc(db, "organizations", userToDelete.targetId)).catch(() => {});
+        }
         alert("Đã xóa tài khoản thành công.");
       } catch (err) {
         alert("Lỗi khi xóa tài khoản: " + err);
@@ -1201,6 +1252,7 @@ export default function App() {
         if (user?.isGroupLeader) return `Tổ trưởng (${user.groupInCharge || 'Tổ'})`;
         return user?.monitorTitle || "Lớp trưởng (BCS)";
       case UserRole.ADVISER: return "Giảng viên Cố vấn (GVCN)";
+      case UserRole.TEACHER: return "Giảng viên Bộ môn";
       case UserRole.ORGANIZER: return "CLB / Đoàn / Hội";
       case UserRole.CLUB_MANAGER: return "Câu lạc bộ";
       case UserRole.YOUTH_UNION: return "Đoàn Thanh niên";
@@ -1382,66 +1434,46 @@ export default function App() {
     }
   };
 
-  // Systems & Dev Core Actions: Reset database to original seed arrays
+  // Systems & Dev Core Actions: Safely merge seed baseline without deleting user-created activities
   const resetDatabaseToSeeds = async () => {
-    if (!confirm("Cảnh báo! Thao tác này sẽ xóa sạch dữ liệu hiện tại trong cơ sở dữ liệu và nạp lại dữ liệu mẫu gốc. Bạn có muốn tiếp tục không?")) {
+    if (!confirm("Cảnh báo! Thao tác này sẽ cập nhật/nạp lại dữ liệu mẫu gốc (bổ sung tài khoản, sinh viên, tiêu chí mẫu). Các hoạt động và tin tức người dùng đã tạo sẽ ĐƯỢC GIỮ NGUYÊN. Bạn có muốn tiếp tục không?")) {
       return;
     }
 
     setLoading(true);
-    setStatusMessage("Đang xóa và nạp lại dữ liệu mẫu...");
+    setStatusMessage("Đang đồng bộ dữ liệu mẫu cơ bản...");
 
     try {
-      // Helper to clear collection
-      const clearCollection = async (colName: string) => {
-        const snap = await getDocs(collection(db, colName));
-        for (const docObj of snap.docs) {
-          await deleteDoc(doc(db, colName, docObj.id));
-        }
-      };
-
-      await clearCollection("users");
-      await clearCollection("students");
-      await clearCollection("organizations");
-      await clearCollection("criteria");
-      await clearCollection("activities");
-      await clearCollection("attendance");
-      await clearCollection("evidence");
-      await clearCollection("results");
-      await clearCollection("dailyAttendance");
-      await clearCollection("schedules");
-      await clearCollection("members");
-
-      // Write Seeds
-      for (const u of SEED_USERS) await setDoc(doc(db, "users", u.id), u);
-      for (const s of SEED_STUDENTS) await setDoc(doc(db, "students", s.id), s);
-      for (const o of SEED_ORGANIZATIONS) await setDoc(doc(db, "organizations", o.id), o);
-      for (const c of SEED_CRITERIA) await setDoc(doc(db, "criteria", c.id), c);
-      for (const a of SEED_ACTIVITIES) await setDoc(doc(db, "activities", a.id), a);
-      for (const att of SEED_ATTENDANCE) await setDoc(doc(db, "attendance", att.id), att);
-      for (const ev of SEED_EVIDENCE) await setDoc(doc(db, "evidence", ev.id), ev);
+      // Upsert baseline Seeds safely with merge: true so user-created records are preserved
+      for (const u of SEED_USERS) await setDoc(doc(db, "users", u.id), u, { merge: true });
+      for (const s of SEED_STUDENTS) await setDoc(doc(db, "students", s.id), s, { merge: true });
+      for (const o of SEED_ORGANIZATIONS) await setDoc(doc(db, "organizations", o.id), o, { merge: true });
+      for (const c of SEED_CRITERIA) await setDoc(doc(db, "criteria", c.id), c, { merge: true });
+      for (const a of SEED_ACTIVITIES) await setDoc(doc(db, "activities", a.id), a, { merge: true });
+      for (const att of SEED_ATTENDANCE) await setDoc(doc(db, "attendance", att.id), att, { merge: true });
+      for (const ev of SEED_EVIDENCE) await setDoc(doc(db, "evidence", ev.id), ev, { merge: true });
       for (const r of SEED_RESULTS) {
         const docId = `${r.studentId}_${r.periodId}`;
-        await setDoc(doc(db, "results", docId), r);
+        await setDoc(doc(db, "results", docId), r, { merge: true });
       }
-      for (const da of SEED_DAILY_ATTENDANCE) await setDoc(doc(db, "dailyAttendance", da.id), da);
-      for (const sc of SEED_SCHEDULES) await setDoc(doc(db, "schedules", sc.id), sc);
-      for (const m of SEED_MEMBERS) await setDoc(doc(db, "members", m.id), m);
+      for (const da of SEED_DAILY_ATTENDANCE) await setDoc(doc(db, "dailyAttendance", da.id), da, { merge: true });
+      for (const sc of SEED_SCHEDULES) await setDoc(doc(db, "schedules", sc.id), sc, { merge: true });
+      for (const m of SEED_MEMBERS) await setDoc(doc(db, "members", m.id), m, { merge: true });
 
-      // Add default super admin to seed list in firestore if not exists
+      // Add default super admin account
       const superadminAccount: UserAccount = {
         id: "U_SUPERADMIN",
         name: "Nhà phát triển (Super Admin)",
         username: "superadmin@unihub.edu.vn",
         email: "superadmin@unihub.edu.vn",
-        role: UserRole.ADMIN, // Or SUPER_ADMIN
+        role: UserRole.ADMIN,
         password: "superadmin"
       };
-      await setDoc(doc(db, "users", "U_SUPERADMIN"), superadminAccount);
+      await setDoc(doc(db, "users", "U_SUPERADMIN"), superadminAccount, { merge: true });
 
-      alert("Khôi phục dữ liệu hệ thống (Reset to Seeds) hoàn tất thành công!");
+      alert("Cập nhật dữ liệu mẫu hệ thống hoàn tất thành công! Các hoạt động đã khai báo vẫn được bảo lưu.");
     } catch (err) {
-      alert("Lỗi trong quá trình khôi phục: " + err);
+      alert("Lỗi trong quá trình cập nhật dữ liệu mẫu: " + err);
     } finally {
       setLoading(false);
       setStatusMessage("");
@@ -1449,7 +1481,9 @@ export default function App() {
   };
 
   const wipeAllDatabase = async () => {
-    if (!confirm("CẢNH BÁO NGUY HIỂM! Thao tác này sẽ xóa sạch toàn bộ cơ sở dữ liệu và không thể hoàn tác. Dữ liệu sẽ trống hoàn toàn. Bạn chắc chắn muốn thực hiện?")) {
+    const userInput = prompt("CẢNH BÁO NGUY HIỂM TỐI CAO! Thao tác này sẽ XÓA VĨNH VIỄN toàn bộ cơ sở dữ liệu bao gồm mọi hoạt động, thông báo, tài khoản sinh viên.\n\nNếu bạn chắc chắn muốn xóa, hãy gõ chính xác cụm từ sau để xác nhận:\nXOA TOAN BO DU LIEU UNIHUB");
+    if (userInput !== "XOA TOAN BO DU LIEU UNIHUB") {
+      alert("Đã hủy thao tác xóa dữ liệu do xác nhận không trùng khớp.");
       return;
     }
 
@@ -1977,6 +2011,7 @@ export default function App() {
                   <option value={UserRole.STUDENT}>Sinh viên</option>
                   <option value={UserRole.CLASS_MONITOR}>Lớp trưởng (BCS)</option>
                   <option value={UserRole.ADVISER}>Giáo viên chủ nhiệm (GVCN)</option>
+                  <option value={UserRole.TEACHER}>Giảng viên Bộ môn</option>
                   <option value={UserRole.CLUB_MANAGER}>Câu lạc bộ</option>
                   <option value={UserRole.YOUTH_UNION}>Đoàn Thanh niên</option>
                   <option value={UserRole.STUDENT_UNION}>Hội Sinh viên</option>
@@ -2010,6 +2045,7 @@ export default function App() {
                           u.role === UserRole.ADMIN ? "badge-danger" :
                           u.role === UserRole.TRAINING_DEPT ? "badge-purple" :
                           u.role === UserRole.ADVISER ? "badge-warning" :
+                          u.role === UserRole.TEACHER ? "badge-cyan" :
                           u.role === UserRole.FACULTY ? "badge-cyan" : "badge-active"
                         }`}>
                           {translateRole(u.role)}
@@ -3204,6 +3240,7 @@ export default function App() {
                     <option value={UserRole.GROUP_LEADER}>Tổ trưởng</option>
                     <option value={UserRole.CLASS_MONITOR}>Lớp trưởng (BCS)</option>
                     <option value={UserRole.ADVISER}>Giảng viên Cố vấn (GVCN)</option>
+                    <option value={UserRole.TEACHER}>Giảng viên Bộ môn</option>
                     <option value={UserRole.CLUB_MANAGER}>Câu lạc bộ</option>
                     <option value={UserRole.YOUTH_UNION}>Đoàn Thanh niên</option>
                     <option value={UserRole.STUDENT_UNION}>Hội Sinh viên</option>
