@@ -861,6 +861,7 @@ export default function App() {
 
     const unsubscribes = [
       onSnapshot(collection(db, "users"), (snap) => {
+        setIsFirebaseConnected(true);
         const list: UserAccount[] = [];
         snap.forEach(d => list.push(d.data() as UserAccount));
         if (list.length > 0) {
