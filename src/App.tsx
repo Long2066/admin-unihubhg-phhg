@@ -222,7 +222,6 @@ const buildTeacherUserFromAssignment = (assignment: CourseClassAssignment): User
     name: assignment.teacherName || login || "Giảng viên Bộ môn",
     role: UserRole.TEACHER,
     email: login,
-    password: (assignment.teacherPassword || "password123").trim(),
     targetId: assignment.teacherId || assignment.subjectCode
   };
 };
@@ -251,10 +250,7 @@ const doesAssignmentBelongToTeacher = (assignment: CourseClassAssignment, teache
   );
 };
 
-const resolveTeacherPassword = (teacher: UserAccount, assignments: CourseClassAssignment[]): string => {
-  const passwordFromTraining = assignments.find(item => item.teacherPassword?.trim())?.teacherPassword?.trim();
-  return passwordFromTraining || teacher.password || "password123";
-};
+
 
 const sanitizeStorageFileName = (fileName: string) => {
   return fileName
@@ -552,9 +548,7 @@ const deleteThemeStorageFileFromUrl = async (url?: string) => {
 
 export default function App() {
   // Authentication state
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return localStorage.getItem("unihub_superadmin_auth") === "true";
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -835,18 +829,22 @@ export default function App() {
 
   // Listen to Auth State to keep session active
   useEffect(() => {
-    const savedAuth = localStorage.getItem("unihub_superadmin_auth");
-    if (savedAuth === "true") {
-      setIsAuthenticated(true);
-    }
     const unsubscribe = onAuthStateChanged(auth, (authUser) => {
-      if (authUser && (
-        authUser.email?.toLowerCase() === "superadmin@unihub.edu.vn" || 
-        authUser.email?.toLowerCase() === "admin@unihub.edu.vn" || 
-        authUser.email?.toLowerCase() === "pcthssv@hg.edu.vn"
-      )) {
+      const allowedEmails = [
+        "admin@phhg.edu.vn",
+        "cthssv@phhg.edu.vn",
+        "superadmin@unihub.edu.vn",
+        "admin@unihub.edu.vn",
+        "pcthssv@hg.edu.vn"
+      ];
+      if (authUser && authUser.email && allowedEmails.includes(authUser.email.toLowerCase())) {
         setIsAuthenticated(true);
         localStorage.setItem("unihub_superadmin_auth", "true");
+      } else if (localStorage.getItem("unihub_superadmin_auth") === "true") {
+        setIsAuthenticated(true);
+      } else {
+        setIsAuthenticated(false);
+        localStorage.removeItem("unihub_superadmin_auth");
       }
     });
     return () => unsubscribe();
@@ -1009,113 +1007,50 @@ export default function App() {
     }
 
     const cleanInput = email.toLowerCase();
-    const isMasterPassword = 
-      password === "admin@123" || 
-      password === "Admin@123" || 
-      password === "password123";
-      
-    const isAdminAccount = 
-      cleanInput === "admin" || 
-      cleanInput === "superadmin" || 
-      cleanInput === "pcthssv" ||
-      cleanInput === "admin@123" ||
-      cleanInput === "admin@unihub.edu.vn" || 
-      cleanInput === "superadmin@unihub.edu.vn" || 
-      cleanInput === "pcthssv@hg.edu.vn";
 
     // Auto-normalize email
     if (!email.includes("@")) {
-      if (cleanInput === "pcthssv") email = "pcthssv@hg.edu.vn";
-      else email = "superadmin@unihub.edu.vn";
-    } else if (cleanInput === "admin@123") {
-      email = "superadmin@unihub.edu.vn";
+      if (cleanInput === "pcthssv" || cleanInput === "cthssv") email = "cthssv@phhg.edu.vn";
+      else if (cleanInput === "admin" || cleanInput === "superadmin") email = "admin@phhg.edu.vn";
+      else email = `${cleanInput}@phhg.edu.vn`;
     }
 
-    // 1. Direct Master Verification (guarantees login immediately with admin@123)
-    if (isMasterPassword && (isAdminAccount || cleanInput.includes("admin") || cleanInput.includes("superadmin"))) {
-      setIsAuthenticated(true);
-      localStorage.setItem("unihub_superadmin_auth", "true");
-      
-      // Update admin doc in Firestore with new password
-      try {
-        const uid = "U_SUPERADMIN_PRIMARY";
-        const adminDoc: UserAccount = {
-          id: uid,
-          username: "admin",
-          name: "Super Admin",
-          role: UserRole.ADMIN,
-          email: email,
-          password: password
-        };
-        await setDoc(doc(db, "users", uid), adminDoc, { merge: true });
-      } catch (docErr) {
-        console.warn("Firestore superadmin doc update:", docErr);
-      }
-      
-      // Try background Firebase Auth sign-in or account sync
-      try {
-        await signInWithEmailAndPassword(auth, email, password);
-      } catch {
-        try {
-          await createUserWithEmailAndPassword(auth, email, password);
-        } catch {}
-      }
-      return;
-    }
-
-    // 2. Standard Firebase Auth flow
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      if (userCredential.user) {
+      let userCredential = null;
+      try {
+        userCredential = await signInWithEmailAndPassword(auth, email, password);
+      } catch (firstErr: any) {
+        // Fallback for legacy credentials if new @phhg.edu.vn account is not yet provisioned in Firebase Auth
+        if (firstErr.code === "auth/user-not-found" || firstErr.code === "auth/invalid-credential") {
+          let fallbackEmail: string | null = null;
+          if (email === "admin@phhg.edu.vn") fallbackEmail = "superadmin@unihub.edu.vn";
+          else if (email === "cthssv@phhg.edu.vn") fallbackEmail = "pcthssv@hg.edu.vn";
+          
+          if (fallbackEmail) {
+            try {
+              userCredential = await signInWithEmailAndPassword(auth, fallbackEmail, password);
+            } catch {
+              throw firstErr;
+            }
+          } else {
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
+
+      if (userCredential?.user) {
         setIsAuthenticated(true);
         localStorage.setItem("unihub_superadmin_auth", "true");
-        const uid = userCredential.user.uid;
-        const adminDoc: UserAccount = {
-          id: uid,
-          username: "admin",
-          name: "Super Admin",
-          role: UserRole.ADMIN,
-          email: email,
-          password: password
-        };
-        await setDoc(doc(db, "users", uid), adminDoc, { merge: true });
       }
     } catch (err: any) {
-      console.log("Admin sign-in failed, checking for superadmin creation...", err.code || err.message);
-      
       if (err.code === "auth/operation-not-allowed") {
-        setLoginError("Lỗi: Phương thức đăng nhập bằng Email/Password chưa được kích hoạt trong Firebase Console của bạn. Vui lòng vào Build -> Authentication -> Sign-in method và BẬT 'Email/Password' lên.");
-        return;
-      }
-
-      try {
-        const userCred = await createUserWithEmailAndPassword(auth, email, password);
-        const uid = userCred.user.uid;
-        setIsAuthenticated(true);
-        localStorage.setItem("unihub_superadmin_auth", "true");
-        
-        const newAdminDoc: UserAccount = {
-          id: uid,
-          username: "admin",
-          name: "Super Admin",
-          role: UserRole.ADMIN,
-          email: email,
-          password: password
-        };
-        await setDoc(doc(db, "users", uid), newAdminDoc, { merge: true });
-        return;
-      } catch (regErr: any) {
-        console.error("Superadmin registration note:", regErr);
-        if (isMasterPassword) {
-          setIsAuthenticated(true);
-          localStorage.setItem("unihub_superadmin_auth", "true");
-          return;
-        }
-        if (regErr.code === "auth/email-already-in-use") {
-          setLoginError("Mật khẩu không chính xác! Hãy dùng mật khẩu 'admin@123' hoặc vào Firebase Console -> Authentication xóa người dùng này để tạo mới.");
-        } else {
-          setLoginError("Đăng nhập thất bại: " + (regErr.message || "Vui lòng kiểm tra lại tài khoản và mật khẩu."));
-        }
+        setLoginError("Lỗi: Phương thức đăng nhập bằng Email/Password chưa được kích hoạt trong Firebase Console.");
+      } else if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+        setLoginError("Tài khoản hoặc mật khẩu không chính xác.");
+      } else {
+        setLoginError("Đăng nhập thất bại: " + (err.message || "Kiểm tra lại tài khoản và mật khẩu."));
       }
     }
   };
@@ -1182,7 +1117,7 @@ export default function App() {
         username: user.username,
         email: user.email,
         role: user.role,
-        password: user.password || "password123",
+        password: user.password || "123456",
         targetId: user.targetId || "",
         monitorTitle: user.monitorTitle || "Lớp trưởng"
       });
@@ -1192,7 +1127,7 @@ export default function App() {
         username: "",
         email: "",
         role: UserRole.STUDENT,
-        password: "",
+        password: "password123",
         targetId: "",
         monitorTitle: "Lớp trưởng"
       });
@@ -1207,13 +1142,11 @@ export default function App() {
       return;
     }
     try {
-      // Setup email and password
       let targetEmail = (userForm.email || "").trim();
       if (!targetEmail) {
         const username = (userForm.username || "").trim();
-        targetEmail = username.includes("@") ? username : `${username}@unihub.edu.vn`;
+        targetEmail = username.includes("@") ? username : `${username}@phhg.edu.vn`;
       }
-      const targetPassword = userForm.password || "password123";
 
       let resolvedTargetId = userForm.targetId ? userForm.targetId.trim() : "";
       if (userForm.role === UserRole.STUDENT) {
@@ -1226,9 +1159,6 @@ export default function App() {
           return;
         }
         resolvedTargetId = studentInTraining.id;
-        if (studentInTraining.idCard && (!userForm.password || userForm.password === "password123")) {
-          userForm.password = studentInTraining.idCard.trim();
-        }
       }
       if (!resolvedTargetId) {
         if (userForm.role === UserRole.YOUTH_UNION) resolvedTargetId = "DOANTN";
@@ -1242,18 +1172,17 @@ export default function App() {
         }
       }
 
-      // Build clean user data object (only allowed Firestore fields, trimmed for accuracy)
       const cleanUsername = userForm.username.trim();
       const cleanEmail = targetEmail.trim();
-      const cleanPassword = targetPassword.trim();
       const cleanName = userForm.name.trim();
+      const targetPassword = userForm.password && userForm.password.trim() ? userForm.password.trim() : (selectedUser?.password || "123456");
 
       const userData: Record<string, any> = {
         name: cleanName,
         username: cleanUsername,
         email: cleanEmail,
         role: userForm.role,
-        password: cleanPassword
+        password: targetPassword
       };
       if (resolvedTargetId) {
         userData.targetId = resolvedTargetId;
@@ -1265,39 +1194,16 @@ export default function App() {
       if (selectedUser) {
         // === EDITING existing user ===
         userData.id = selectedUser.id;
-        await setDoc(doc(db, "users", selectedUser.id), userData);
+        await setDoc(doc(db, "users", selectedUser.id), userData, { merge: true });
       } else {
         // === CREATING new user ===
-        // Always create Firebase Auth account so user can actually login
-        let authUid: string | null = null;
-        try {
-          const tempAppName = `TempApp_${Date.now()}`;
-          const tempApp = initializeApp(firebaseConfig, tempAppName);
-          const tempAuth = getAuth(tempApp);
-          const userCred = await createUserWithEmailAndPassword(tempAuth, targetEmail, targetPassword);
-          authUid = userCred.user.uid;
-          await deleteApp(tempApp);
-        } catch (authErr: any) {
-          if (authErr.code === "auth/email-already-in-use") {
-            // Account already exists on Firebase Auth — try sign-in to get real UID
-            console.warn("Firebase Auth account already exists for:", targetEmail);
-            try {
-              const tempApp2 = initializeApp(firebaseConfig, `TempSignIn_${Date.now()}`);
-              const tempAuth2 = getAuth(tempApp2);
-              const signInCred = await signInWithEmailAndPassword(tempAuth2, targetEmail, targetPassword);
-              authUid = signInCred.user.uid;
-              await deleteApp(tempApp2);
-            } catch (signInErr) {
-              console.warn("Could not sign in to get existing UID:", signInErr);
-            }
-          } else {
-            console.warn("Firebase Auth user creation warning:", authErr.code, authErr.message);
-          }
-        }
-
-        const targetDocId = authUid || `U_GEN_${Date.now()}`;
+        const targetDocId = cleanEmail || `U_GEN_${Date.now()}`;
         userData.id = targetDocId;
         await setDoc(doc(db, "users", targetDocId), userData);
+      }
+
+      if (userForm.role === UserRole.STUDENT && resolvedTargetId) {
+        await setDoc(doc(db, "students", resolvedTargetId), { password: targetPassword }, { merge: true });
       }
 
       // Auto-upsert matching Organization document for org accounts so CTHSSV portal renders it
@@ -1376,10 +1282,9 @@ export default function App() {
     }
   };
 
-  // Masquerade: Open main application port 3000 with impersonation parameter
-  const impersonate = (username: string) => {
-    const targetUrl = `http://localhost:3000/?impersonate=${encodeURIComponent(username)}`;
-    window.open(targetUrl, "_blank");
+  // Masquerade: Disabled safely
+  const impersonate = (_username?: string) => {
+    alert("Tính năng giả lập phiên (Masquerade) đã bị vô hiệu hóa an toàn. Cần triển khai backend signed impersonation token & audit log.");
   };
 
   const translateRole = (role: UserRole, user?: any) => {
@@ -1583,7 +1488,9 @@ export default function App() {
 
     try {
       // Upsert baseline Seeds safely with merge: true so user-created records are preserved
-      for (const u of SEED_USERS) await setDoc(doc(db, "users", u.id), u, { merge: true });
+      for (const u of SEED_USERS) {
+        await setDoc(doc(db, "users", u.id), u, { merge: true });
+      }
       for (const s of SEED_STUDENTS) await setDoc(doc(db, "students", s.id), s, { merge: true });
       for (const o of SEED_ORGANIZATIONS) await setDoc(doc(db, "organizations", o.id), o, { merge: true });
       for (const c of SEED_CRITERIA) await setDoc(doc(db, "criteria", c.id), c, { merge: true });
@@ -1603,10 +1510,10 @@ export default function App() {
       const superadminAccount: UserAccount = {
         id: "U_SUPERADMIN",
         name: "Nhà phát triển (Super Admin)",
-        username: "superadmin@unihub.edu.vn",
-        email: "superadmin@unihub.edu.vn",
+        username: "admin@phhg.edu.vn",
+        email: "admin@phhg.edu.vn",
         role: UserRole.ADMIN,
-        password: "superadmin"
+        password: "admin@123"
       };
       await setDoc(doc(db, "users", "U_SUPERADMIN"), superadminAccount, { merge: true });
 
@@ -1649,14 +1556,14 @@ export default function App() {
       await clearCollection("schedules");
       await clearCollection("members");
 
-      // Always restore the superadmin account so you can log back in
+      // Always restore the superadmin profile document in Firestore
       const superadminAccount: UserAccount = {
         id: "U_SUPERADMIN",
         name: "Nhà phát triển (Super Admin)",
-        username: "superadmin@unihub.edu.vn",
-        email: "superadmin@unihub.edu.vn",
+        username: "admin@phhg.edu.vn",
+        email: "admin@phhg.edu.vn",
         role: UserRole.ADMIN,
-        password: "superadmin"
+        password: "admin@123"
       };
       await setDoc(doc(db, "users", "U_SUPERADMIN"), superadminAccount);
 
@@ -1779,7 +1686,6 @@ export default function App() {
           name: existing.name || assign.teacherName,
           username: existing.username || assignmentLogin,
           email: existing.email || assignmentLogin,
-          password: existing.password || assign.teacherPassword || "Abc@123",
           targetId: existing.targetId || assign.teacherId || assign.subjectCode
         });
       } else {
@@ -1898,6 +1804,11 @@ export default function App() {
   const hasLegacyAdminThemeImages = hasLegacyInlineThemeImages(themeConfig);
 
   const isTeacherUserModal = showUserModal && (selectedUser?.role === UserRole.TEACHER || userForm.role === UserRole.TEACHER);
+  const resolveTeacherPassword = (u: UserAccount, assignments: CourseClassAssignment[]) => {
+    if (u.password) return u.password;
+    const match = assignments.find(a => (a.teacherId && a.teacherId.toLowerCase() === u.username.toLowerCase()) || (a.teacherName && a.teacherName.toLowerCase() === u.name.toLowerCase()));
+    return match?.teacherPassword || "123456";
+  };
   const modalTeacherAccount: UserAccount | null = isTeacherUserModal ? {
     ...(selectedUser || {
       id: buildDerivedTeacherDocId(userForm.username || userForm.email || userForm.name || "teacher"),
@@ -1905,13 +1816,12 @@ export default function App() {
       username: userForm.username || userForm.email || "",
       email: userForm.email || userForm.username || "",
       role: UserRole.TEACHER,
-      password: userForm.password || "password123"
+      password: userForm.password || "123456"
     }),
     name: userForm.name || selectedUser?.name || "Giảng viên Bộ môn",
     username: userForm.username || userForm.email || selectedUser?.username || selectedUser?.email || "",
     email: userForm.email || userForm.username || selectedUser?.email || selectedUser?.username || "",
     role: UserRole.TEACHER,
-    password: userForm.password || selectedUser?.password || "password123",
     targetId: userForm.targetId || selectedUser?.targetId || ""
   } : null;
   const modalTeacherAssignments = modalTeacherAccount ? getTeacherAssignmentsForUser(modalTeacherAccount) : [];
@@ -1963,7 +1873,7 @@ export default function App() {
             <input 
               type="text" 
               className="input-dark" 
-              placeholder="admin hoặc superadmin@unihub.edu.vn" 
+              placeholder="admin hoặc admin@phhg.edu.vn" 
               value={loginEmail}
               onChange={(e) => setLoginEmail(e.target.value)}
               required
@@ -2262,7 +2172,7 @@ export default function App() {
                   {filteredUsers.map((u) => {
                     const isTeacherRow = u.role === UserRole.TEACHER;
                     const linkedAssignments = isTeacherRow ? getTeacherAssignmentsForUser(u) : [];
-                    const displayPassword = isTeacherRow ? resolveTeacherPassword(u, linkedAssignments) : (u.password || "••••••••");
+                    const displayPassword = isTeacherRow ? resolveTeacherPassword(u, linkedAssignments) : (u.password || "123456");
 
                     return (
                       <tr key={u.id || u.username || u.email}>
@@ -2282,7 +2192,7 @@ export default function App() {
                         <td style={{ fontFamily: 'monospace', color: "var(--accent-cyan)" }}>
                           {isTeacherRow ? `${linkedAssignments.length} học phần` : (u.targetId || "—")}
                         </td>
-                        <td style={{ fontFamily: 'monospace', fontSize: "11px" }}>{displayPassword}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: "11px", color: "var(--accent-cyan)" }}>{displayPassword}</td>
                         <td style={{ textAlign: "right" }}>
                           <div style={{ display: "inline-flex", gap: "8px" }}>
                             {isTeacherRow ? (
@@ -2299,12 +2209,13 @@ export default function App() {
                             ) : (
                               <>
                                 <button 
+                                  type="button"
                                   className="btn-neon-purple" 
-                                  style={{ padding: "4px 8px", fontSize: "11px" }}
-                                  onClick={() => impersonate(u.username)}
-                                  title="Đăng nhập giả lập dưới tài khoản này tại cổng 3000"
+                                  style={{ padding: "4px 8px", fontSize: "11px", opacity: 0.5, cursor: "not-allowed" }}
+                                  disabled
+                                  title="Chức năng giả lập phiên đã bị vô hiệu hóa an toàn (yêu cầu backend signed token & audit log)"
                                 >
-                                  Giả lập (Masquerade)
+                                  Giả lập (Vô hiệu hóa)
                                 </button>
                                 <button 
                                   className="btn-neon-cyan" 
@@ -3525,8 +3436,8 @@ export default function App() {
                     className="input-dark" 
                     value={isTeacherUserModal ? modalTeacherPassword : userForm.password} 
                     onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} 
-                    placeholder="Bắt buộc nhập..."
-                    required 
+                    placeholder="Nhập mật khẩu..."
+                    required={!selectedUser}
                     readOnly={isTeacherUserModal}
                     style={teacherInputReadonlyStyle}
                   />

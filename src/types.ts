@@ -31,10 +31,10 @@ export interface UserAccount {
   role: UserRole;
   email: string;
   targetId?: string; // Links to Student ID, Organization ID, Class ID, or Faculty ID if applicable
-  password?: string;
   isGroupLeader?: boolean;
   groupInCharge?: string;
   monitorTitle?: string;
+  password?: string;
 }
 
 export interface CourseClassAssignment {
